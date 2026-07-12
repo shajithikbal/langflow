@@ -56,6 +56,13 @@ from lfx.schema.dotdict import dotdict
 from lfx.schema.message import Message
 from lfx.schema.table import EditMode
 from lfx.utils.constants import MESSAGE_SENDER_AI
+from lfx.components.models_and_agents.agent_helpers.guidelines import (
+    Guideline,
+    TraceCollector,
+    build_guidelines_service,
+    compose_system_prompt_with_guidelines,
+    get_guidelines_service,
+)
 
 
 def set_advanced_true(component_input):
@@ -308,6 +315,56 @@ class AgentComponent(ToolCallingAgentComponent):
             ),
             value=True,
         ),
+        BoolInput(
+            name="use_guidelines",
+            display_name="Use Guidelines",
+            info=(
+                "Master switch for the guidelines / test-time-learning subsystem. "
+                "When true, guidelines are fetched from the configured store and "
+                "appended to the agent's system prompt for every run. "
+                "When false, the agent behaves exactly like a plain agent — no "
+                "guidelines are injected, no curation runs, and the store is not "
+                "touched."
+            ),
+            value=False,
+            advanced=True,
+        ),
+        BoolInput(
+            name="learn_guidelines_online",
+            display_name="Learn Guidelines Online",
+            info=(
+                "Only considered when `use_guidelines` is true. When enabled, after "
+                "each agent run the full trace is sent to a curator LLM that proposes "
+                "an updated set of guidelines, which are persisted to the store. "
+                "Set to false to use existing stored guidelines without further "
+                "curation — useful in evaluation runs where you want stable prompts."
+            ),
+            value=False,
+            advanced=True,
+        ),
+        DropdownInput(
+            name="guidelines_store_type",
+            display_name="Guidelines Store Type",
+            info=(
+                "Where to persist guidelines between agent runs. "
+                "'in_memory' = ephemeral, lost on process exit. "
+                "'file' = JSON file on disk (see Guidelines File Path). "
+                "Ignored when Use Guidelines is false."
+            ),
+            options=["in_memory", "file"],
+            value="in_memory",
+            advanced=True,
+        ),
+        StrInput(
+            name="guidelines_file_path",
+            display_name="Guidelines File Path",
+            info=(
+                "Path to the JSON file used when Guidelines Store Type is 'file'. "
+                "Relative paths are resolved against the current working directory."
+            ),
+            value="guidelines.json",
+            advanced=True,
+        ),
     ]
     outputs = [
         Output(name="response", display_name="Response", method="message_response"),
@@ -538,6 +595,9 @@ class AgentComponent(ToolCallingAgentComponent):
                 raise NotImplementedError(msg) from exc
 
         middleware = self._build_middleware(llm)
+        print(f">>> SYS={self.system_prompt!r}", flush=True)
+        #logger.warning(f"SYS={self.system_prompt!r}")
+        logger.error(f"SYS={self.system_prompt!r}")
         return create_agent(
             model=llm,
             tools=tools,
@@ -623,20 +683,31 @@ class AgentComponent(ToolCallingAgentComponent):
         # for start/end overhead.
         recursion_limit = self._compute_recursion_limit()
 
-        stream = adapt_graph_events_to_executor_shape(
-            agent.astream_events(
-                input_dict,
-                config={
-                    "callbacks": [
-                        AgentAsyncHandler(self.log),
-                        token_usage_handler,
-                        *self._get_shared_callbacks(),
-                    ],
-                    "recursion_limit": recursion_limit,
-                },
-                version="v2",
-            )
+        trace_collector: TraceCollector | None = (
+            TraceCollector()
+            if getattr(self, "use_guidelines", False) and getattr(self, "learn_guidelines_online", False)
+            else None
         )
+
+
+        raw_event_stream = agent.astream_events(
+            input_dict,
+            config={
+                "callbacks": [
+                    AgentAsyncHandler(self.log),
+                    token_usage_handler,
+                    *self._get_shared_callbacks(),
+                ],
+                "recursion_limit": recursion_limit,
+            },
+            version="v2",
+        )
+
+        if trace_collector is not None:
+            raw_event_stream = trace_collector.tee(raw_event_stream)
+
+        stream = adapt_graph_events_to_executor_shape(raw_event_stream)
+
         try:
             result = await process_agent_events(
                 stream,
@@ -667,6 +738,10 @@ class AgentComponent(ToolCallingAgentComponent):
                 await self._send_message_event(stored_result)
                 result = stored_result
 
+        # Stash the trace so message_response can hand it to the curator.
+        # Always overwrite — there's only ever one in-flight run per component.
+        self._last_trace_collector = trace_collector
+
         self.status = result
         return result
 
@@ -691,19 +766,64 @@ class AgentComponent(ToolCallingAgentComponent):
     async def message_response(self) -> Message:
         try:
             llm_model, self.chat_history, self.tools = await self.get_agent_requirements()
+
+            use_guidelines = getattr(self, "use_guidelines", False)
+            learn_online = getattr(self, "learn_guidelines_online", False)
+
+            # learn_guidelines_online has no effect when use_guidelines is False — warn once so the user sees it.
+            if learn_online and not use_guidelines:
+                await logger.awarning(
+                    "learn_guidelines_online=True is ignored because use_guidelines=False."
+                )
+
+            if use_guidelines:
+                guidelines_svc = build_guidelines_service(
+                    store_type=getattr(self, "guidelines_store_type", None),
+                    file_path=getattr(self, "guidelines_file_path", None),
+                )
+                self._current_guidelines = await guidelines_svc.get_active()
+                composed_system_prompt = compose_system_prompt_with_guidelines(
+                    self._inject_dynamic_prompt_values(self.system_prompt),
+                    self._current_guidelines,
+                )
+            else:
+                guidelines_svc = None
+                self._current_guidelines = None
+                composed_system_prompt = self._inject_dynamic_prompt_values(self.system_prompt)
+
             # Set up and run agent
             self.set(
                 llm=llm_model,
                 tools=self.tools or [],
                 chat_history=self.chat_history,
                 input_value=self.input_value,
-                system_prompt=self._inject_dynamic_prompt_values(self.system_prompt),
+                system_prompt=composed_system_prompt,
             )
+
             agent = self.create_agent_runnable()
             result = await self.run_agent(agent)
 
             # Store result for potential JSON output
             self._agent_result = result
+
+            # --- Curation runs only when guidelines are used AND online learning is on ---
+            if use_guidelines and learn_online:
+                try:
+                    collector: TraceCollector | None = getattr(self, "_last_trace_collector", None)
+                    steps = collector.to_steps() if collector else []
+                    updated = await guidelines_svc.curate_and_store(
+                        llm=self._get_llm(),
+                        trace_steps=steps,
+                        user_input=_extract_text_content(self.input_value),
+                        agent_output=_extract_text_content(result),
+                        current_guidelines=self._current_guidelines,
+                    )
+                    self._last_curated_guidelines = updated
+                    await logger.awarning(f"Curator proposed {len(updated)} updated guideline(s):")
+                    for g in updated:
+                        await logger.awarning(f"  - {g.text}")
+                except Exception as curator_exc:  # noqa: BLE001
+                    await logger.aerror(f"Curator failed (non-fatal): {curator_exc}")
 
         except (ValueError, TypeError, KeyError) as e:
             await logger.aerror(f"{type(e).__name__}: {e!s}")
@@ -735,7 +855,22 @@ class AgentComponent(ToolCallingAgentComponent):
             await logger.aerror(f"json_response.requirements_failed: {exc}")
             return Data(data={"content": "", "error": str(exc)})
 
-        injected_system_prompt = self._inject_dynamic_prompt_values(getattr(self, "system_prompt", "") or "") or ""
+        base_prompt = self._inject_dynamic_prompt_values(getattr(self, "system_prompt", "") or "")
+        if getattr(self, "use_guidelines", False):
+            guidelines_svc = build_guidelines_service(
+                store_type=getattr(self, "guidelines_store_type", None),
+                file_path=getattr(self, "guidelines_file_path", None),
+            )
+            injected_system_prompt = (
+                compose_system_prompt_with_guidelines(
+                    base_prompt,
+                    await guidelines_svc.get_active(),
+                )
+                or ""
+            )
+        else:
+            injected_system_prompt = base_prompt or ""
+
         format_instructions = getattr(self, "format_instructions", "") or ""
         output_schema = getattr(self, "output_schema", None) or []
         has_tools = bool(self.tools)
