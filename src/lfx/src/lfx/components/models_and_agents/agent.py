@@ -44,6 +44,11 @@ from lfx.components.agentics.helpers.model_config import validate_model_selectio
 from lfx.components.helpers import CalculatorComponent, CurrentDateComponent
 from lfx.components.langchain_utilities.ibm_granite_handler import is_watsonx_model
 from lfx.components.langchain_utilities.tool_calling import ToolCallingAgentComponent
+from lfx.components.models_and_agents.agent_helpers.guidelines import (
+    TraceCollector,
+    build_guidelines_service,
+    compose_system_prompt_with_guidelines,
+)
 from lfx.custom.custom_component.component import get_component_toolkit
 from lfx.field_typing.range_spec import RangeSpec
 from lfx.inputs.inputs import BoolInput, DropdownInput, ModelInput, StrInput
@@ -56,13 +61,6 @@ from lfx.schema.dotdict import dotdict
 from lfx.schema.message import Message
 from lfx.schema.table import EditMode
 from lfx.utils.constants import MESSAGE_SENDER_AI
-from lfx.components.models_and_agents.agent_helpers.guidelines import (
-    Guideline,
-    TraceCollector,
-    build_guidelines_service,
-    compose_system_prompt_with_guidelines,
-    get_guidelines_service,
-)
 
 
 def set_advanced_true(component_input):
@@ -365,6 +363,18 @@ class AgentComponent(ToolCallingAgentComponent):
             value="guidelines.json",
             advanced=True,
         ),
+        StrInput(
+            name="guidelines_postgres_dsn",
+            display_name="Guidelines Postgres DSN",
+            info=(
+                "PostgreSQL connection string (e.g. "
+                "'postgresql://user:pass@localhost:5432/langflow'). "  # pragma: allowlist secret
+                "Used only when Guidelines Store Type is 'postgres'. "
+                "The `guidelines` table is created automatically on first use."
+            ),
+            value="",
+            advanced=True,
+        ),
     ]
     outputs = [
         Output(name="response", display_name="Response", method="message_response"),
@@ -595,8 +605,8 @@ class AgentComponent(ToolCallingAgentComponent):
                 raise NotImplementedError(msg) from exc
 
         middleware = self._build_middleware(llm)
-        print(f">>> SYS={self.system_prompt!r}", flush=True)
-        #logger.warning(f"SYS={self.system_prompt!r}")
+        # print(f">>> SYS={self.system_prompt!r}", flush=True)
+        # logger.warning(f"SYS={self.system_prompt!r}")
         logger.error(f"SYS={self.system_prompt!r}")
         return create_agent(
             model=llm,
@@ -689,7 +699,6 @@ class AgentComponent(ToolCallingAgentComponent):
             else None
         )
 
-
         raw_event_stream = agent.astream_events(
             input_dict,
             config={
@@ -772,9 +781,7 @@ class AgentComponent(ToolCallingAgentComponent):
 
             # learn_guidelines_online has no effect when use_guidelines is False — warn once so the user sees it.
             if learn_online and not use_guidelines:
-                await logger.awarning(
-                    "learn_guidelines_online=True is ignored because use_guidelines=False."
-                )
+                await logger.awarning("learn_guidelines_online=True is ignored because use_guidelines=False.")
 
             if use_guidelines:
                 guidelines_svc = build_guidelines_service(
