@@ -347,9 +347,10 @@ class AgentComponent(ToolCallingAgentComponent):
                 "Where to persist guidelines between agent runs. "
                 "'in_memory' = ephemeral, lost on process exit. "
                 "'file' = JSON file on disk (see Guidelines File Path). "
+                "'postgres' = PostgreSQL table (see Guidelines Postgres DSN). "
                 "Ignored when Use Guidelines is false."
             ),
-            options=["in_memory", "file"],
+            options=["in_memory", "file", "postgres"],
             value="in_memory",
             advanced=True,
         ),
@@ -787,6 +788,7 @@ class AgentComponent(ToolCallingAgentComponent):
                 guidelines_svc = build_guidelines_service(
                     store_type=getattr(self, "guidelines_store_type", None),
                     file_path=getattr(self, "guidelines_file_path", None),
+                    postgres_dsn=getattr(self, "guidelines_postgres_dsn", None),
                 )
                 self._current_guidelines = await guidelines_svc.get_active()
                 composed_system_prompt = compose_system_prompt_with_guidelines(
@@ -867,6 +869,7 @@ class AgentComponent(ToolCallingAgentComponent):
             guidelines_svc = build_guidelines_service(
                 store_type=getattr(self, "guidelines_store_type", None),
                 file_path=getattr(self, "guidelines_file_path", None),
+                postgres_dsn=getattr(self, "guidelines_postgres_dsn", None),
             )
             injected_system_prompt = (
                 compose_system_prompt_with_guidelines(

@@ -56,6 +56,7 @@ dependencies = [
 opendsstar = [
     "OpenDsStar==1.0.26; python_version >= '3.11' and python_version < '3.14' and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
 ]
+postgres = ["asyncpg>=0.29,<1.0"]
 
 [project.scripts]
 lfx = "lfx.__main__:main"

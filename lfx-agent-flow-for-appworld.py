@@ -1,20 +1,17 @@
+# ruff: noqa
+
 import asyncio
-import os
+import json
 from pathlib import Path
 
 from dotenv import dotenv_values
-
-from lfx.graph import Graph
 from lfx.base.mcp.util import update_tools
-from lfx.components.models_and_agents.agent import AgentComponent
-from lfx.components.litellm.litellm_proxy import LiteLLMProxyComponent
 from lfx.components.input_output.chat import ChatInput
 from lfx.components.input_output.chat_output import ChatOutput
+from lfx.components.litellm.litellm_proxy import LiteLLMProxyComponent
+from lfx.components.models_and_agents.agent import AgentComponent
+from lfx.graph import Graph
 from lfx.schema.schema import InputValueRequest
-
-import json
-import re
-from jinja2 import Template
 
 
 async def get_available_tasks(tools_by_name: dict, dataset: str, limit: int = 10_000) -> list[str]:
@@ -26,8 +23,7 @@ async def get_available_tasks(tools_by_name: dict, dataset: str, limit: int = 10
     tool = tools_by_name.get("list_available_tasks")
     if tool is None:
         raise RuntimeError(
-            "MCP tool `list_available_tasks` was not loaded from the server. "
-            f"Available tools: {list(tools_by_name)}"
+            f"MCP tool `list_available_tasks` was not loaded from the server. Available tools: {list(tools_by_name)}"
         )
 
     raw = await tool.ainvoke({"dataset": dataset, "limit": limit})
@@ -53,11 +49,7 @@ async def get_available_tasks(tools_by_name: dict, dataset: str, limit: int = 10
         if isinstance(first, list):
             return first
 
-    raise RuntimeError(
-        f"Unexpected return shape from list_available_tasks: "
-        f"{type(raw).__name__}: {raw!r}"
-    )
-
+    raise RuntimeError(f"Unexpected return shape from list_available_tasks: {type(raw).__name__}: {raw!r}")
 
 
 PROMPT_TEMPLATE = """\
@@ -95,42 +87,44 @@ Begin now with step 1.
 """
 
 # --- Load secrets from config file ---
-#default_config = Path("~/secrets/litellm.env").expanduser()
-#config_path = Path(os.environ.get("LITELLM_CONFIG", default_config))
+# default_config = Path("~/secrets/litellm.env").expanduser()
+# config_path = Path(os.environ.get("LITELLM_CONFIG", default_config))
 config_path = Path("/home/sha/work/soft-innov/llm/agentic/test-time-learning/basics/litellm/.env")
 if not config_path.is_file():
     raise FileNotFoundError(f"LiteLLM config file not found: {config_path}")
 config = dotenv_values(config_path)
 
+
 async def main():
     # --- Load MCP tools directly from the server ---
     server_name = "local-mcp"
     server_config = {
-        "mode": "Streamable_HTTP",          # or "SSE" if your server uses SSE
-        "url": "http://127.0.0.1:34450/mcp", # change suffix to /sse if SSE
+        "mode": "Streamable_HTTP",  # or "SSE" if your server uses SSE
+        "url": "http://127.0.0.1:34450/mcp",  # change suffix to /sse if SSE
         "headers": {},
     }
     _name, mcp_tools, _tools_by_name = await update_tools(
         server_name=server_name,
         server_config=server_config,
     )
-    print(f"Loaded {len(mcp_tools)} tool(s) from MCP server: "
-          f"{[t.name for t in mcp_tools]}")
+    print(f"Loaded {len(mcp_tools)} tool(s) from MCP server: {[t.name for t in mcp_tools]}")
 
     # --- Components ---
     chat_input = ChatInput()
-    #chat_input.set(input_value="List the tools you have.")
+    # chat_input.set(input_value="List the tools you have.")
     llm = LiteLLMProxyComponent()
     agent = AgentComponent()
     chat_output = ChatOutput()
 
     # --- Configure the LiteLLM proxy ---
     llm.set(
-        api_base=config["LITELLM_BASE_URL"], #"https://ete-litellm.ai-models.vpc-int.res.ibm.com",     # your LiteLLM proxy URL (incl. /v1)
-        api_key=config["LITELLM_API_KEY"], #os.environ.get("LITELLM_API_KEY", "sk-..."),   # your virtual key
-        model_name="claude-haiku-4-5", #"gpt-4o-mini",                # any model your proxy routes for
+        api_base=config[
+            "LITELLM_BASE_URL"
+        ],  # "https://ete-litellm.ai-models.vpc-int.res.ibm.com",     # your LiteLLM proxy URL (incl. /v1)
+        api_key=config["LITELLM_API_KEY"],  # os.environ.get("LITELLM_API_KEY", "sk-..."),   # your virtual key
+        model_name="claude-haiku-4-5",  # "gpt-4o-mini",                # any model your proxy routes for
         temperature=0.7,
-        max_tokens=0,                            # 0 = no limit
+        max_tokens=0,  # 0 = no limit
         timeout=600,
         max_retries=2,
         stream=True,
@@ -139,23 +133,25 @@ async def main():
     # --- Wiring ---
     agent.set(
         input_value=chat_input.message_response,
-        model=llm.build_model,                   # ← the LLM the agent uses
-        tools=mcp_tools,            # plain list of StructuredTool — no edge wiring
+        model=llm.build_model,  # ← the LLM the agent uses
+        tools=mcp_tools,  # plain list of StructuredTool — no edge wiring
         system_prompt="You are a helpful agent. Use MCP tools when relevant.",
-        max_iterations=300, #60,     # ← AppWorld tasks need many tool-call rounds
-        use_guidelines=True,             # apply guidelines from the store
-        learn_guidelines_online=True,    # curate and update the store after each run
-        guidelines_store_type="file",
-        guidelines_file_path="/home/sha/work/soft-innov/llm/agentic/test-time-learning/frameworks/langflow/code/dev-17jun26/trials/trial-0/guidelines.json",
-        #guidelines_file_path="/root/blocked.json", #"/home/sha/work/soft-innov/llm/agentic/test-time-learning/frameworks/langflow/code/dev-17jun26/trials/trial-0/guidelines.json",
+        max_iterations=300,  # 60,     # ← AppWorld tasks need many tool-call rounds
+        use_guidelines=True,  # apply guidelines from the store
+        learn_guidelines_online=True,  # curate and update the store after each run
+        guidelines_store_type="postgres", #"file",
+        guidelines_file_path="/home/sha/work/soft-innov/llm/agentic/test-time-learning/frameworks/langflow/code/dev-forked-11jul26/trials/trial-0/guidelines.json",
+        # guidelines_file_path="/root/blocked.json", #"/home/sha/work/soft-innov/llm/agentic/test-time-learning/frameworks/langflow/code/dev-17jun26/trials/trial-0/guidelines.json",
+        guidelines_postgres_dsn="postgresql://postgres:pass@localhost:5432/postgres",  # pragma: allowlist secret
+        #guidelines_postgres_dsn="postgresql://user:pass@localhost:5432/langflow",  # pragma: allowlist secret
     )
     chat_output.set(input_value=agent.message_response)
 
     graph = Graph(start=chat_input, end=chat_output)
     agent_vertex = graph.get_vertex(agent.get_id())
 
-    DATASET_NAME = "dev" #"test_normal"            # train | dev | test_normal | test_challenge
-    TASK_COUNT_LIMIT: int | None = 4        # cap how many you run this time; None = all
+    DATASET_NAME = "dev"  # "test_normal"            # train | dev | test_normal | test_challenge
+    TASK_COUNT_LIMIT: int | None = 4  # cap how many you run this time; None = all
 
     all_task_ids = await get_available_tasks(_tools_by_name, DATASET_NAME, limit=10_000)
     if TASK_COUNT_LIMIT is not None:
@@ -165,27 +161,26 @@ async def main():
 
     print(f"Got {len(all_task_ids)} task(s) from dataset={DATASET_NAME!r}.")
 
-    #for task_id in all_task_ids:
-        # ... your existing per-task body ...
-
+    # for task_id in all_task_ids:
+    # ... your existing per-task body ...
 
     # --- Run ---
-    #questions = ["What is 2 + 2?", "List the tools you have.", "Can you list me the tasks available?"]
+    # questions = ["What is 2 + 2?", "List the tools you have.", "Can you list me the tasks available?"]
     question = "Solve the task."
-    #task_id = "82e2fac_1"
-    #experiment_name="test-experiment"
-    #for question in questions:
+    # task_id = "82e2fac_1"
+    # experiment_name="test-experiment"
+    # for question in questions:
     for task_id in all_task_ids:
-        #agent_vertex.update_raw_params(
+        # agent_vertex.update_raw_params(
         #   {"system_prompt": "You are a helpful agent. Use MCP tools when relevant and as required."},
         #    overwrite=True,
-        #)
+        # )
         agent_vertex.update_raw_params(
-           {"system_prompt": PROMPT_TEMPLATE.format(task_id=task_id, experiment_name="test-experiment")},
+            {"system_prompt": PROMPT_TEMPLATE.format(task_id=task_id, experiment_name="test-experiment")},
             overwrite=True,
         )
-        #graph = Graph(start=chat_input, end=chat_output)
-        async for step in graph.async_start( #):
+        # graph = Graph(start=chat_input, end=chat_output)
+        async for step in graph.async_start(  # ):
             inputs=InputValueRequest(
                 components=["Chat Input"],
                 input_value=question,
@@ -195,7 +190,7 @@ async def main():
         ):
             if not hasattr(step, "result_dict"):
                 continue
-            #print(f"--- {step.vertex.display_name} ---")
+            # print(f"--- {step.vertex.display_name} ---")
             if step.vertex.display_name not in ("Agent", "Chat Output"):
                 continue
             for key, value in step.result_dict.results.items():

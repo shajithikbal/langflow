@@ -18,11 +18,11 @@ Internal — useful for tests, future CuratorComponent, offline reflection scrip
     - GuidelinesService, set_guidelines_service()
     - DEFAULT_HARDCODED_GUIDELINES, CURATOR_SYSTEM_PROMPT, CURATOR_USER_TEMPLATE
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
@@ -44,11 +44,13 @@ def _utcnow_iso() -> str:
 # 1. Definition — the Guideline type
 # =========================================================================
 
+
 @dataclass(frozen=True)
 class Guideline:
     """A single self-contained guideline for the agent."""
+
     text: str
-    source: str = "hardcoded"          # "hardcoded" | "curator" | "user"
+    source: str = "hardcoded"  # "hardcoded" | "curator" | "user"
     id: str | None = None
     domain: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -68,9 +70,10 @@ DEFAULT_HARDCODED_GUIDELINES: list[Guideline] = [
 # 2. Trace capture — used by AgentComponent.run_agent to tap astream_events
 # =========================================================================
 
+
 @dataclass(frozen=True)
 class TraceStep:
-    kind: str          # "llm_call" | "tool_result"
+    kind: str  # "llm_call" | "tool_result"
     name: str = ""
     content: str = ""
     raw: Any = None
@@ -78,7 +81,8 @@ class TraceStep:
 
 class TraceCollector:
     """Async-generator tap. Records every event flowing through the agent's
-    astream_events pipeline without disturbing the downstream consumer."""
+    astream_events pipeline without disturbing the downstream consumer.
+    """
 
     def __init__(self) -> None:
         self.events: list[dict] = []
@@ -102,23 +106,27 @@ class TraceCollector:
                     summary.append(f"text: {text}")
                 for tc in tool_calls:
                     summary.append(f"tool_call: {tc.get('name', '<tool>')}({tc.get('args', {})})")
-                steps.append(TraceStep(
-                    kind="llm_call",
-                    name=event.get("name", "<llm>"),
-                    content="\n".join(summary),
-                    raw=event,
-                ))
+                steps.append(
+                    TraceStep(
+                        kind="llm_call",
+                        name=event.get("name", "<llm>"),
+                        content="\n".join(summary),
+                        raw=event,
+                    )
+                )
             elif etype == "on_tool_end":
                 output = data.get("output")
                 result_text = str(getattr(output, "content", output))
                 if len(result_text) > max_tool_output_chars:
                     result_text = result_text[:max_tool_output_chars] + " ...[truncated]"
-                steps.append(TraceStep(
-                    kind="tool_result",
-                    name=event.get("name", "<tool>"),
-                    content=result_text,
-                    raw=event,
-                ))
+                steps.append(
+                    TraceStep(
+                        kind="tool_result",
+                        name=event.get("name", "<tool>"),
+                        content=result_text,
+                        raw=event,
+                    )
+                )
         return steps
 
 
@@ -135,6 +143,7 @@ def _format_trace(steps: list[TraceStep]) -> str:
 # 3. Storage — GuidelineStore ABC + in-memory and file implementations
 # =========================================================================
 
+
 class GuidelineStore(ABC):
     """Backend for reading, writing, and searching guidelines."""
 
@@ -148,14 +157,13 @@ class GuidelineStore(ABC):
     async def delete(self, guideline_ids: list[str]) -> None: ...
 
     @abstractmethod
-    async def search(
-        self, query: str, *, domain: str | None = None, k: int = 10
-    ) -> list[Guideline]: ...
+    async def search(self, query: str, *, domain: str | None = None, k: int = 10) -> list[Guideline]: ...
 
 
 class InMemoryGuidelineStore(GuidelineStore):
     """Dev/test default. Also used as a graceful fallback when the file store
-    fails to initialize."""
+    fails to initialize.
+    """
 
     def __init__(self) -> None:
         self._by_domain: dict[str | None, dict[str, Guideline]] = {}
@@ -222,7 +230,8 @@ class FileGuidelineStore(GuidelineStore):
     def _probe_path(self) -> None:
         """Verify the path is usable: either an existing readable file, or a
         location where we can create the parent directory. Raise OSError if not
-        so callers (e.g. _build_store) can catch and fall back."""
+        so callers (e.g. _build_store) can catch and fall back.
+        """
         try:
             if self._path.exists():
                 # Confirm we can actually stat it (readable).
@@ -232,9 +241,7 @@ class FileGuidelineStore(GuidelineStore):
                 self._path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             # Re-raise as OSError so _build_store's except-branch catches it.
-            raise OSError(
-                f"FileGuidelineStore: path {self._path!r} is not usable: {e}"
-            ) from e
+            raise OSError(f"FileGuidelineStore: path {self._path!r} is not usable: {e}") from e
 
     # ---- persistence helpers ------------------------------------------------
 
@@ -246,10 +253,7 @@ class FileGuidelineStore(GuidelineStore):
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as e:
-            logger.warning(
-                f"FileGuidelineStore: could not read {self._path} ({e}); "
-                "starting from empty state."
-            )
+            logger.warning(f"FileGuidelineStore: could not read {self._path} ({e}); starting from empty state.")
             self._by_domain = {}
             self._loaded = True
             return
@@ -274,16 +278,18 @@ class FileGuidelineStore(GuidelineStore):
         rows: list[dict[str, Any]] = []
         for bucket in self._by_domain.values():
             for g in bucket.values():
-                rows.append({
-                    "id": g.id,
-                    "text": g.text,
-                    "source": g.source,
-                    "domain": g.domain,
-                    "metadata": g.metadata,
-                    "version": g.version,
-                    "is_current": g.is_current,
-                    "created_at": g.created_at,
-                })
+                rows.append(
+                    {
+                        "id": g.id,
+                        "text": g.text,
+                        "source": g.source,
+                        "domain": g.domain,
+                        "metadata": g.metadata,
+                        "version": g.version,
+                        "is_current": g.is_current,
+                        "created_at": g.created_at,
+                    }
+                )
         payload = {"version": self._SCHEMA_VERSION, "guidelines": rows}
         self._path.parent.mkdir(parents=True, exist_ok=True)
         # Atomic write: temp file + rename so a crashed run can't leave a
@@ -306,7 +312,8 @@ class FileGuidelineStore(GuidelineStore):
     async def upsert(self, guidelines, *, domain=None):
         """Insert new guidelines while flipping any pre-existing current row for
         the same guideline id (if provided) to is_current=False. That gives us
-        the same version-history semantics we'll use in Postgres later."""
+        the same version-history semantics we'll use in Postgres later.
+        """
         async with self._lock:
             await self._ensure_loaded()
             bucket = self._by_domain.setdefault(domain, {})
@@ -339,7 +346,8 @@ class FileGuidelineStore(GuidelineStore):
 
     async def delete(self, guideline_ids):
         """Soft delete — flip is_current=False. Keeps history intact so you
-        can audit what was removed and when."""
+        can audit what was removed and when.
+        """
         async with self._lock:
             await self._ensure_loaded()
             for bucket in self._by_domain.values():
@@ -355,9 +363,205 @@ class FileGuidelineStore(GuidelineStore):
         return (await self.get(domain=domain))[:k]
 
 
+class PostgresGuidelineStore(GuidelineStore):
+    """PostgreSQL-backed store. Multi-process safe; suitable for production.
+
+    Schema (auto-created on first use):
+        CREATE TABLE IF NOT EXISTS guidelines (
+            id UUID PRIMARY KEY,
+            text TEXT NOT NULL,
+            source TEXT NOT NULL,
+            domain TEXT,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            version INTEGER NOT NULL DEFAULT 1,
+            is_current BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+    Versioning semantics match FileGuidelineStore: upsert with an id that
+    matches a current row retires it (is_current=FALSE) and inserts a new
+    row with version bumped and a fresh uuid. delete is soft.
+    """
+
+    _TABLE = "guidelines"
+
+    def __init__(self, dsn: str) -> None:
+        if not dsn:
+            raise OSError("PostgresGuidelineStore requires a non-empty DSN.")
+        try:
+            import asyncpg  # noqa: F401
+        except ImportError as e:
+            raise OSError(
+                "PostgresGuidelineStore requires the `asyncpg` package. Install with: `pip install asyncpg`."
+            ) from e
+        self._dsn = dsn
+        self._pool = None
+        self._lock = asyncio.Lock()
+        self._schema_ready = False
+        # Eager probe (mirrors FileGuidelineStore._probe_path) so _build_store
+        # can catch and fall back BEFORE the first agent invocation.
+        self._probe_dsn()
+
+    def _probe_dsn(self) -> None:
+        """Sync ping via a short-lived loop in a worker thread — avoids
+        conflicts if we're being constructed from inside an active loop.
+        """
+        import threading
+
+        import asyncpg
+
+        result: dict[str, Any] = {"error": None}
+
+        def _run() -> None:
+            loop = asyncio.new_event_loop()
+            try:
+
+                async def _ping() -> None:
+                    conn = await asyncpg.connect(dsn=self._dsn, timeout=5)
+                    try:
+                        await conn.execute("SELECT 1")
+                    finally:
+                        await conn.close()
+
+                loop.run_until_complete(_ping())
+            except Exception as e:  # noqa: BLE001
+                result["error"] = e
+            finally:
+                loop.close()
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout=10.0)
+        if t.is_alive() or result["error"] is not None:
+            err = result["error"] or TimeoutError("connect timed out")
+            raise OSError(f"PostgresGuidelineStore: DSN not reachable: {err}") from (
+                err if isinstance(err, BaseException) else None
+            )
+
+    async def _ensure_pool(self) -> None:
+        if self._pool is None:
+            import asyncpg
+
+            self._pool = await asyncpg.create_pool(dsn=self._dsn, min_size=1, max_size=5)
+
+    async def _ensure_schema(self) -> None:
+        if self._schema_ready:
+            return
+        await self._ensure_pool()
+        async with self._pool.acquire() as conn:
+            await conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {self._TABLE} (
+                    id UUID PRIMARY KEY,
+                    text TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    domain TEXT,
+                    metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    is_current BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+            """)
+            await conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS {self._TABLE}_domain_current_idx
+                    ON {self._TABLE} (domain, is_current)
+                    WHERE is_current;
+            """)
+        self._schema_ready = True
+
+    @staticmethod
+    def _row_to_guideline(row) -> Guideline:
+        meta = row["metadata"]
+        if isinstance(meta, str):
+            meta = json.loads(meta)
+        created = row["created_at"]
+        return Guideline(
+            id=str(row["id"]),
+            text=row["text"],
+            source=row["source"],
+            domain=row["domain"],
+            metadata=meta or {},
+            version=int(row["version"]),
+            is_current=bool(row["is_current"]),
+            created_at=created.isoformat() if hasattr(created, "isoformat") else str(created),
+        )
+
+    async def get(self, *, domain=None):
+        async with self._lock:
+            await self._ensure_schema()
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT id, text, source, domain, metadata, version, is_current, created_at
+                FROM {self._TABLE}
+                WHERE domain IS NOT DISTINCT FROM $1 AND is_current
+                ORDER BY created_at
+                """,
+                domain,
+            )
+        return [self._row_to_guideline(r) for r in rows]
+
+    async def upsert(self, guidelines, *, domain=None):
+        async with self._lock:
+            await self._ensure_schema()
+            async with self._pool.acquire() as conn, conn.transaction():
+                current_rows = await conn.fetch(
+                    f"""
+                    SELECT id, version FROM {self._TABLE}
+                    WHERE domain IS NOT DISTINCT FROM $1 AND is_current
+                    """,
+                    domain,
+                )
+                current_by_id = {str(r["id"]): int(r["version"]) for r in current_rows}
+
+                for g in guidelines:
+                    gid = g.id or str(uuid4())
+                    prior_version = current_by_id.get(gid)
+                    if prior_version is not None:
+                        await conn.execute(
+                            f"UPDATE {self._TABLE} SET is_current = FALSE WHERE id = $1::uuid",
+                            gid,
+                        )
+                        new_version = prior_version + 1
+                        new_row_id = str(uuid4())
+                    else:
+                        new_version = 1
+                        new_row_id = gid
+
+                    await conn.execute(
+                        f"""
+                        INSERT INTO {self._TABLE}
+                            (id, text, source, domain, metadata, version, is_current, created_at)
+                        VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, TRUE, NOW())
+                        """,
+                        new_row_id,
+                        g.text,
+                        g.source,
+                        domain,
+                        json.dumps(g.metadata or {}),
+                        new_version,
+                    )
+
+    async def delete(self, guideline_ids):
+        async with self._lock:
+            await self._ensure_schema()
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                f"""
+                UPDATE {self._TABLE} SET is_current = FALSE
+                WHERE id = ANY($1::uuid[]) AND is_current
+                """,
+                guideline_ids,
+            )
+
+    async def search(self, query, *, domain=None, k=10):
+        # Match FileGuidelineStore.search — first k current rows for the domain.
+        return (await self.get(domain=domain))[:k]
+
+
 # =========================================================================
 # 4. Composer — how guidelines become part of the system prompt
 # =========================================================================
+
 
 def compose_system_prompt_with_guidelines(
     base_prompt: str | None,
@@ -448,15 +652,15 @@ async def curate_guidelines(
         trace=_format_trace(trace_steps) or "(empty trace)",
         agent_output=agent_output or "(empty)",
     )
-    response = await llm.ainvoke([
-        SystemMessage(content=CURATOR_SYSTEM_PROMPT),
-        HumanMessage(content=user_message),
-    ])
+    response = await llm.ainvoke(
+        [
+            SystemMessage(content=CURATOR_SYSTEM_PROMPT),
+            HumanMessage(content=user_message),
+        ]
+    )
     raw_text = getattr(response, "content", "") or ""
     if not isinstance(raw_text, str):
-        raw_text = "\n".join(
-            chunk.get("text", "") for chunk in raw_text if isinstance(chunk, dict)
-        )
+        raw_text = "\n".join(chunk.get("text", "") for chunk in raw_text if isinstance(chunk, dict))
     return [Guideline(text=s, source="curator") for s in _parse_curator_response(raw_text)]
 
 
@@ -464,9 +668,11 @@ async def curate_guidelines(
 # 6. Retrieval + facade — the single entry point agent.py talks to
 # =========================================================================
 
+
 class GuidelinesService:
     """Facade over the guidelines subsystem. AgentComponent talks to this
-    class exclusively — never to store/curator/composer directly."""
+    class exclusively — never to store/curator/composer directly.
+    """
 
     def __init__(self, store: GuidelineStore) -> None:
         self.store = store
@@ -529,13 +735,19 @@ class GuidelinesService:
 # or callers that skip the AgentComponent-configured entry point).
 _DEFAULT_STORE_TYPE: str = "in_memory"
 _DEFAULT_FILE_PATH: str = "guidelines.json"
+_DEFAULT_POSTGRES_DSN: str = ""
 
 _DEFAULT_SERVICE: GuidelinesService | None = None
 
 
-def _build_store(store_type: str, file_path: str) -> GuidelineStore:
-    """Construct a store from the given (type, path). Falls back to in-memory
-    on any failure so use_guidelines=True always works — just without persistence."""
+def _build_store(
+    store_type: str,
+    file_path: str,
+    postgres_dsn: str = "",
+) -> GuidelineStore:
+    """Construct a store from the given settings. Falls back to in-memory on
+    any failure so use_guidelines=True always works — just without persistence.
+    """
     kind = (store_type or _DEFAULT_STORE_TYPE).lower()
 
     if kind == "in_memory":
@@ -546,18 +758,23 @@ def _build_store(store_type: str, file_path: str) -> GuidelineStore:
         try:
             return FileGuidelineStore(path=path)
         except Exception as e:  # noqa: BLE001
-            import logging
-            root_level = logging.getLogger().getEffectiveLevel()
             print(
-                f"[GUIDELINES] Failed to initialize FileGuidelineStore at {path!r} "
-                f"({e}); falling back to in-memory. "
-                f"[root logger level={root_level}]",
+                f"[GUIDELINES] Failed to initialize FileGuidelineStore at {path!r} ({e}); falling back to in-memory.",
                 flush=True,
             )
-            logger.warning(
-                f"Failed to initialize FileGuidelineStore at {path!r} ({e}); "
-                "falling back to in-memory."
+            logger.warning(f"Failed to initialize FileGuidelineStore at {path!r} ({e}); falling back to in-memory.")
+            return InMemoryGuidelineStore()
+
+    if kind == "postgres":
+        dsn = postgres_dsn or _DEFAULT_POSTGRES_DSN
+        try:
+            return PostgresGuidelineStore(dsn=dsn)
+        except Exception as e:  # noqa: BLE001
+            print(
+                f"[GUIDELINES] Failed to initialize PostgresGuidelineStore ({e}); falling back to in-memory.",
+                flush=True,
             )
+            logger.warning(f"Failed to initialize PostgresGuidelineStore ({e}); falling back to in-memory.")
             return InMemoryGuidelineStore()
 
     print(f"[GUIDELINES] Unknown guidelines store type={kind!r}; falling back to in-memory.", flush=True)
@@ -565,10 +782,10 @@ def _build_store(store_type: str, file_path: str) -> GuidelineStore:
     return InMemoryGuidelineStore()
 
 
-
 def build_guidelines_service(
     store_type: str | None = None,
     file_path: str | None = None,
+    postgres_dsn: str | None = None,
 ) -> GuidelinesService:
     """Build a fresh GuidelinesService with the given store settings.
 
@@ -580,6 +797,7 @@ def build_guidelines_service(
         store=_build_store(
             store_type or _DEFAULT_STORE_TYPE,
             file_path or _DEFAULT_FILE_PATH,
+            postgres_dsn or _DEFAULT_POSTGRES_DSN,
         )
     )
 
@@ -600,4 +818,3 @@ def set_guidelines_service(service: GuidelinesService) -> None:
     """Override the default (for tests, or to inject a custom store)."""
     global _DEFAULT_SERVICE
     _DEFAULT_SERVICE = service
-
