@@ -113,6 +113,7 @@ async def main():
     chat_input = ChatInput()
     # chat_input.set(input_value="List the tools you have.")
     llm = LiteLLMProxyComponent()
+    curator_llm = LiteLLMProxyComponent()
     agent = AgentComponent()
     chat_output = ChatOutput()
 
@@ -130,10 +131,22 @@ async def main():
         stream=True,
     )
 
+    curator_llm.set(                               # a stronger model for curation
+        api_base=config["LITELLM_BASE_URL"],
+        api_key=config["LITELLM_API_KEY"],
+        model_name="claude-sonnet-4-5",            # curator model
+        temperature=0.2,                           # lower — curator should be deterministic
+        max_tokens=0, 
+        timeout=600,
+        max_retries=2,
+        stream=False,                              # curator does one ainvoke, no need to stream
+    )
+
     # --- Wiring ---
     agent.set(
         input_value=chat_input.message_response,
         model=llm.build_model,  # ← the LLM the agent uses
+        curator_model=curator_llm.build_model,
         tools=mcp_tools,  # plain list of StructuredTool — no edge wiring
         system_prompt="You are a helpful agent. Use MCP tools when relevant.",
         max_iterations=300,  # 60,     # ← AppWorld tasks need many tool-call rounds

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelCallLimitMiddleware, ToolRetryMiddleware
+from langchain_core.language_models import BaseLanguageModel
 
 from lfx.components.models_and_agents.agent_helpers.graph_event_adapter import (
     adapt_graph_events_to_executor_shape,
@@ -376,6 +377,20 @@ class AgentComponent(ToolCallingAgentComponent):
             value="",
             advanced=True,
         ),
+        ModelInput(
+            name="curator_model",
+            display_name="Curator Language Model",
+            info=(
+                "Optional separate language model used for guideline curation. "
+                "When Learn Guidelines Online is enabled, this model reviews the "
+                "agent's trace after each run and proposes updated guidelines. "
+                "If left unset, the agent's own language model is used as fallback."
+            ),
+            required=False,
+            advanced=True,
+            # No tool_calling filter — the curator only does a single ainvoke and
+            # returns a JSON array of strings, so any chat-capable model qualifies.
+        ),
     ]
     outputs = [
         Output(name="response", display_name="Response", method="message_response"),
@@ -446,6 +461,22 @@ class AgentComponent(ToolCallingAgentComponent):
             watsonx_url=getattr(self, "base_url_ibm_watsonx", None),
             watsonx_project_id=getattr(self, "project_id", None),
         )
+
+    def _resolve_curator_llm(self):
+        """Return the curator LLM, or the agent's own LLM as fallback.
+
+        When a `curator_model` is wired into the component, LFX resolves the
+        upstream model component's `build_model` and injects it here as a
+        concrete BaseLanguageModel. When not wired, `self.curator_model` is
+        None and we reuse the agent's model so curation still runs.
+        """
+        try:
+            curator = getattr(self, "curator_model", None)
+            if isinstance(curator, BaseLanguageModel):
+                return curator
+        except ImportError:
+            pass
+        return self._get_llm()
 
     async def get_agent_requirements(self):
         """Get the agent requirements for the agent."""
@@ -821,7 +852,7 @@ class AgentComponent(ToolCallingAgentComponent):
                     collector: TraceCollector | None = getattr(self, "_last_trace_collector", None)
                     steps = collector.to_steps() if collector else []
                     updated = await guidelines_svc.curate_and_store(
-                        llm=self._get_llm(),
+                        llm=self._resolve_curator_llm(), #llm=self._get_llm(),
                         trace_steps=steps,
                         user_input=_extract_text_content(self.input_value),
                         agent_output=_extract_text_content(result),
